@@ -159,15 +159,24 @@ jobs:
           source deploy/azure/automation/az-retry.sh
           wrapper="$(mktemp)"
           trap 'rm -f "$wrapper"' EXIT
-          printf 'export COMPUTE_PROFILE=%q\n' "$COMPUTE_PROFILE" > "$wrapper"
-          cat deploy/azure/automation/install-vm.sh >> "$wrapper"
-          az vm run-command invoke \
+          payload="$(mktemp)"
+          trap 'rm -f "$wrapper" "$payload"' EXIT
+          {
+            printf 'export COMPUTE_PROFILE=%q\n' "$COMPUTE_PROFILE"
+            cat deploy/azure/automation/install-vm.sh
+          } > "$payload"
+          encoded="$(base64 -w 0 "$payload")"
+          printf "set +e; printf '%%s' '%s' | base64 --decode > /tmp/keivo-install.sh; bash /tmp/keivo-install.sh; status=\$?; printf '\\n__KEIVO_EXIT_CODE__=%%s\\n' \"\$status\"; rm -f /tmp/keivo-install.sh; exit 0\n" "$encoded" > "$wrapper"
+          message="$(az vm run-command invoke \
             --resource-group "$RESOURCE_GROUP" \
             --name "$VM_NAME" \
             --command-id RunShellScript \
             --scripts @"$wrapper" \
             --query 'value[0].message' \
-            --output tsv
+            --output tsv)"
+          printf '%s\n' "$message"
+          remote_status="$(sed -n 's/.*__KEIVO_EXIT_CODE__=\([0-9][0-9]*\).*/\1/p' <<<"$message" | tail -n 1)"
+          [[ "$remote_status" == '0' ]] || { echo "VM dependency installation failed with remote exit code ${remote_status:-unknown}." >&2; exit 1; }
 
       - name: Deploy Compose stack without SSH
         if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}

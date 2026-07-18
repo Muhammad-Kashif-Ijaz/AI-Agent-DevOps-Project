@@ -195,6 +195,24 @@ az network nic create \
   --public-ip-address "$public_ip_name" \
   --output none
 
+# Re-assert the complete public network path on every update. This repairs NICs
+# left partially configured by interrupted Azure CLI operations.
+nsg_id="$(az network nsg show --resource-group "$resource_group" --name "$nsg_name" --query id --output tsv)"
+pip_id="$(az network public-ip show --resource-group "$resource_group" --name "$public_ip_name" --query id --output tsv)"
+subnet_id="$(az network vnet subnet show --resource-group "$resource_group" --vnet-name "$vnet_name" --name "$subnet_name" --query id --output tsv)"
+az network nic update \
+  --resource-group "$resource_group" \
+  --name "$nic_name" \
+  --network-security-group "$nsg_id" \
+  --output none
+az network nic ip-config update \
+  --resource-group "$resource_group" \
+  --nic-name "$nic_name" \
+  --name ipconfig1 \
+  --subnet "$subnet_id" \
+  --public-ip-address "$pip_id" \
+  --output none
+
 if ! az vm show --resource-group "$resource_group" --name "$vm_name" --output none 2>/dev/null; then
   az vm create \
     --resource-group "$resource_group" \

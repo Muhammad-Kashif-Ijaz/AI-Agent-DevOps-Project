@@ -74,6 +74,26 @@ fi
 "${compose[@]}" build --pull keivo
 "${compose[@]}" up -d --remove-orphans
 
+# Do not report a successful deployment unless Caddy is actually bound on the
+# host-facing HTTP port. HTTPS certificate issuance follows through this path.
+edge_ready=false
+for _ in {1..60}; do
+  edge_code="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+    --header "Host: $fqdn" --max-time 5 http://127.0.0.1/ 2>/dev/null || true)"
+  if [[ "$edge_code" == "301" || "$edge_code" == "302" || "$edge_code" == "307" || "$edge_code" == "308" || "$edge_code" == "401" ]]; then
+    edge_ready=true
+    break
+  fi
+  sleep 5
+done
+if [[ "$edge_ready" != true ]]; then
+  "${compose[@]}" ps
+  "${compose[@]}" logs --tail=160 caddy || true
+  ss -lntp | grep -E ':(80|443) ' || true
+  echo 'Caddy did not bind to the public web ports.' >&2
+  exit 1
+fi
+
 healthy=false
 for _ in {1..180}; do
   if "${compose[@]}" exec -T keivo python -c \

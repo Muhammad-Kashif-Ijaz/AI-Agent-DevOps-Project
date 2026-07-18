@@ -34,12 +34,26 @@ tar -czf "$bundle" \
 bundle_base64="$(base64 -w 0 "$bundle")"
 upload_script="install -d -m 0750 /opt/keivo; printf '%s' '$bundle_base64' | base64 --decode > /tmp/keivo-deploy.tgz; tar -xzf /tmp/keivo-deploy.tgz -C /opt/keivo; rm -f /tmp/keivo-deploy.tgz; chmod 700 /opt/keivo/remote-deploy.sh"
 
-az vm run-command invoke \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$VM_NAME" \
-  --command-id RunShellScript \
-  --scripts "$upload_script" \
-  --output none
+run_vm_script_checked() {
+  local script="$1" encoded wrapper message remote_status
+  encoded="$(printf '%s' "$script" | base64 -w 0)"
+  wrapper="set +e; printf '%s' '$encoded' | base64 --decode > /tmp/keivo-command.sh; bash /tmp/keivo-command.sh; status=\$?; printf '\n__KEIVO_EXIT_CODE__=%s\n' \"\$status\"; rm -f /tmp/keivo-command.sh; exit 0"
+  message="$(az vm run-command invoke \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$VM_NAME" \
+    --command-id RunShellScript \
+    --scripts "$wrapper" \
+    --query 'value[0].message' \
+    --output tsv)"
+  printf '%s\n' "$message"
+  remote_status="$(sed -n 's/.*__KEIVO_EXIT_CODE__=\([0-9][0-9]*\).*/\1/p' <<<"$message" | tail -n 1)"
+  [[ "$remote_status" == "0" ]] || {
+    echo "Azure VM command failed with remote exit code ${remote_status:-unknown}." >&2
+    return 1
+  }
+}
+
+run_vm_script_checked "$upload_script"
 
 model_b64="$(printf '%s' "$OLLAMA_MODEL" | base64 -w 0)"
 email_b64="$(printf '%s' "$ACME_EMAIL" | base64 -w 0)"
@@ -48,10 +62,4 @@ auth_hash_b64="$(printf '%s' "$KEIVO_AUTH_HASH" | base64 -w 0)"
 remote_command="bash /opt/keivo/remote-deploy.sh '$auth_hash_b64' '$model_b64' '$KEIVO_FQDN' '$email_b64' '$user_b64' '$COMPUTE_PROFILE'"
 unset KEIVO_AUTH_HASH auth_hash_b64
 
-az vm run-command invoke \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$VM_NAME" \
-  --command-id RunShellScript \
-  --scripts "$remote_command" \
-  --query 'value[0].message' \
-  --output tsv
+run_vm_script_checked "$remote_command"

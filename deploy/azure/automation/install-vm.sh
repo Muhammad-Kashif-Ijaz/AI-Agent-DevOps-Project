@@ -27,8 +27,12 @@ if [[ "$(id -u)" != "0" ]]; then
   exit 1
 fi
 
-apt-get update -y
-apt-get install -y ca-certificates curl gnupg jq lsb-release apt-transport-https
+# Fresh Azure images can keep apt/dpkg locked while cloud-init finishes.
+if command -v cloud-init >/dev/null 2>&1; then
+  timeout 600 cloud-init status --wait >/dev/null 2>&1 || true
+fi
+retry 8 apt-get update -y
+retry 8 apt-get install -y ca-certificates curl gnupg jq lsb-release apt-transport-https
 
 # Mount the dedicated managed disk and keep Docker's images and named volumes on it.
 disk_link='/dev/disk/azure/scsi1/lun10'
@@ -91,23 +95,15 @@ else
   rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list
 fi
 
-# Azure CLI is used only with the VM's managed identity for ACR and Key Vault.
-curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-  | gpg --dearmor --yes -o /etc/apt/keyrings/microsoft.gpg
-chmod a+r /etc/apt/keyrings/microsoft.gpg
-printf 'deb [arch=%s signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ %s main\n' \
-  "$architecture" "$ubuntu_codename" > /etc/apt/sources.list.d/azure-cli.list
-
-apt-get update -y
-apt-get install -y \
-  azure-cli \
+retry 8 apt-get update -y
+retry 8 apt-get install -y \
   docker-ce \
   docker-ce-cli \
   containerd.io \
   docker-buildx-plugin \
   docker-compose-plugin
 if [[ "$COMPUTE_PROFILE" == "gpu" ]]; then
-  apt-get install -y nvidia-container-toolkit
+  retry 8 apt-get install -y nvidia-container-toolkit
 fi
 
 install -d -m 0755 /etc/docker
@@ -123,6 +119,14 @@ fi
 systemctl enable --now docker
 systemctl restart docker
 
+# Ubuntu normally leaves UFW disabled on Azure, but explicitly preserve the
+# public web ports when an image or policy has enabled it.
+if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
+  ufw allow 80/tcp >/dev/null
+  ufw allow 443/tcp >/dev/null
+  ufw reload >/dev/null
+fi
+
 if [[ "$COMPUTE_PROFILE" == "gpu" ]]; then
   # The driver extension may still be settling after the VM restart.
   retry 30 nvidia-smi >/dev/null
@@ -131,5 +135,4 @@ fi
 
 docker version >/dev/null
 docker compose version >/dev/null
-az version >/dev/null
 printf 'VM dependencies for profile %s are ready.\n' "$COMPUTE_PROFILE"
