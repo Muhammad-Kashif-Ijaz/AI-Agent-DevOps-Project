@@ -2,21 +2,17 @@
 set -Eeuo pipefail
 
 [[ "$(id -u)" == "0" ]] || { echo 'Deployment must run as root.' >&2; exit 1; }
-[[ "$#" == "8" ]] || { echo 'Deployment parameters are incomplete.' >&2; exit 1; }
+[[ "$#" == "6" ]] || { echo 'Deployment parameters are incomplete.' >&2; exit 1; }
 
-acr_name="$1"
-auth_hash="$(printf '%s' "$2" | base64 --decode)"
-image="$3"
-model="$(printf '%s' "$4" | base64 --decode)"
-fqdn="$5"
-acme_email="$(printf '%s' "$6" | base64 --decode)"
-auth_user="$(printf '%s' "$7" | base64 --decode)"
-compute_profile="$8"
+auth_hash="$(printf '%s' "$1" | base64 --decode)"
+model="$(printf '%s' "$2" | base64 --decode)"
+fqdn="$3"
+acme_email="$(printf '%s' "$4" | base64 --decode)"
+auth_user="$(printf '%s' "$5" | base64 --decode)"
+compute_profile="$6"
 
-[[ "$acr_name" =~ ^[a-z0-9]{5,50}$ ]] || { echo 'ACR name is invalid.' >&2; exit 1; }
 [[ "$auth_hash" == \$2a\$* || "$auth_hash" == \$2b\$* || "$auth_hash" == \$2y\$* ]] || { echo 'Authentication hash is invalid.' >&2; exit 1; }
 [[ "$auth_hash" != *$'\n'* && "$auth_hash" != *"'"* ]] || { echo 'Authentication hash has an invalid format.' >&2; exit 1; }
-[[ "$image" =~ ^[a-z0-9.-]+\.azurecr\.io/[a-z0-9._/-]+:[A-Za-z0-9._-]+$ ]] || { echo 'Image reference is invalid.' >&2; exit 1; }
 [[ "$model" =~ ^[A-Za-z0-9._:/-]+$ ]] || { echo 'Model name is invalid.' >&2; exit 1; }
 [[ "$fqdn" =~ ^[a-z0-9.-]+\.cloudapp\.azure\.com$ ]] || { echo 'Azure endpoint is invalid.' >&2; exit 1; }
 [[ "$acme_email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || { echo 'ACME email is invalid.' >&2; exit 1; }
@@ -28,30 +24,9 @@ if [[ "$compute_profile" == "free-cpu" && "$model" != "qwen3:0.6b" ]]; then
 fi
 
 cd /opt/keivo
-for required in compose.yaml Caddyfile compose.acr.override.yaml compose.cpu.override.yaml; do
+for required in compose.yaml Caddyfile Dockerfile requirements.txt server.py static/index.html compose.local.override.yaml compose.cpu.override.yaml; do
   [[ -f "$required" ]] || { echo "Missing deployment file: $required" >&2; exit 1; }
 done
-
-# Registry authentication uses only the system-assigned VM identity.
-login_ok=false
-for _ in {1..24}; do
-  if az login --identity --allow-no-subscriptions --output none 2>/dev/null; then
-    login_ok=true
-    break
-  fi
-  sleep 5
-done
-[[ "$login_ok" == true ]] || { echo 'Managed identity sign-in is not ready.' >&2; exit 1; }
-
-registry_ok=false
-for _ in {1..24}; do
-  if az acr login --name "$acr_name" --output none 2>/dev/null; then
-    registry_ok=true
-    break
-  fi
-  sleep 5
-done
-[[ "$registry_ok" == true ]] || { echo 'Managed identity cannot access the container registry.' >&2; exit 1; }
 
 umask 077
 environment_tmp="$(mktemp /opt/keivo/.env.XXXXXX)"
@@ -61,7 +36,6 @@ trap 'rm -f "$environment_tmp"' EXIT
   printf 'ACME_EMAIL=%s\n' "$acme_email"
   printf 'KEIVO_AUTH_USER=%s\n' "$auth_user"
   printf "KEIVO_AUTH_HASH='%s'\n" "$auth_hash"
-  printf 'KEIVO_IMAGE=%s\n' "$image"
   printf 'OLLAMA_MODEL=%s\n' "$model"
   printf 'OLLAMA_IMAGE_TAG=latest\n'
   if [[ "$compute_profile" == "free-cpu" ]]; then
@@ -91,12 +65,13 @@ mv -f "$environment_tmp" /opt/keivo/.env
 trap - EXIT
 unset auth_hash
 
-compose=(docker compose --env-file .env -f compose.yaml -f compose.acr.override.yaml)
+compose=(docker compose --env-file .env -f compose.yaml -f compose.local.override.yaml)
 if [[ "$compute_profile" == "free-cpu" ]]; then
   compose+=(-f compose.cpu.override.yaml)
 fi
 "${compose[@]}" config --quiet
-"${compose[@]}" pull
+"${compose[@]}" pull --ignore-buildable
+"${compose[@]}" build --pull keivo
 "${compose[@]}" up -d --remove-orphans
 
 healthy=false
@@ -168,5 +143,4 @@ finally:
 PY
 
 "${compose[@]}" ps
-docker logout "${acr_name}.azurecr.io" >/dev/null 2>&1 || true
 printf 'KEIVO application and local model are healthy.\n'

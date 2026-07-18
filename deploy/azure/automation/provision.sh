@@ -109,20 +109,12 @@ if [[ "$KEIVO_ACTION" == "status" || "$KEIVO_ACTION" == "deallocate" ]]; then
   exit 0
 fi
 
-for namespace in Microsoft.Compute Microsoft.Network Microsoft.ContainerRegistry; do
+for namespace in Microsoft.Compute Microsoft.Network; do
   az provider register --namespace "$namespace" --wait --output none
 done
 
 printf 'Creating or updating Azure resources in %s...\n' "$AZURE_REGION"
 az group create --name "$resource_group" --location "$AZURE_REGION" --output none
-
-az acr create \
-  --resource-group "$resource_group" \
-  --name "$acr_name" \
-  --location "$AZURE_REGION" \
-  --sku "$acr_sku" \
-  --admin-enabled false \
-  --output none
 
 az network nsg create \
   --resource-group "$resource_group" \
@@ -269,26 +261,6 @@ principal_id="$(az vm identity show \
   --query principalId \
   --output tsv)"
 [[ -n "$principal_id" ]] || fail "The VM managed identity was not created."
-
-acr_id="$(az acr show --resource-group "$resource_group" --name "$acr_name" --query id --output tsv)"
-for role_scope in "AcrPull|$acr_id"; do
-  role="${role_scope%%|*}"
-  scope="${role_scope#*|}"
-  count="$(az role assignment list \
-    --assignee-object-id "$principal_id" \
-    --role "$role" \
-    --scope "$scope" \
-    --query 'length(@)' \
-    --output tsv)"
-  if [[ "$count" == "0" ]]; then
-    az role assignment create \
-      --assignee-object-id "$principal_id" \
-      --assignee-principal-type ServicePrincipal \
-      --role "$role" \
-      --scope "$scope" \
-      --output none
-  fi
-done
 
 if [[ "$COMPUTE_PROFILE" == "gpu" ]]; then
   # The paid GPU profile installs the host NVIDIA driver. The free profile skips it.

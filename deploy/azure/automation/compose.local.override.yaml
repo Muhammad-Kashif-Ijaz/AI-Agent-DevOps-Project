@@ -1,0 +1,7 @@
+services:
+  keivo:
+    image: keivo:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: build

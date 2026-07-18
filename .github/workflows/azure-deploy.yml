@@ -147,24 +147,6 @@ jobs:
           FQDN: ${{ steps.infra.outputs.fqdn }}
         run: printf 'url=https://%s\n' "$FQDN" >> "$GITHUB_OUTPUT"
 
-      - name: Build KEIVO image in Azure Container Registry
-        id: image
-        if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}
-        shell: bash
-        env:
-          ACR_NAME: ${{ steps.infra.outputs.acr_name }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          set -Eeuo pipefail
-          login_server="$(az acr show --name "$ACR_NAME" --query loginServer --output tsv)"
-          image="$login_server/keivo:$IMAGE_TAG"
-          az acr build \
-            --registry "$ACR_NAME" \
-            --image "keivo:$IMAGE_TAG" \
-            --file deploy/azure/Dockerfile \
-            .
-          printf 'reference=%s\n' "$image" >> "$GITHUB_OUTPUT"
-
       - name: Install VM runtime dependencies
         if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}
         shell: bash
@@ -193,8 +175,6 @@ jobs:
           RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
           VM_NAME: ${{ steps.infra.outputs.vm_name }}
           AZURE_REGION: ${{ steps.region.outputs.region }}
-          ACR_NAME: ${{ steps.infra.outputs.acr_name }}
-          KEIVO_IMAGE: ${{ steps.image.outputs.reference }}
           OLLAMA_MODEL: ${{ inputs.model }}
           KEIVO_FQDN: ${{ steps.infra.outputs.fqdn }}
           ACME_EMAIL: ${{ inputs.acme_email }}
