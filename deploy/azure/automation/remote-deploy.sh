@@ -5,7 +5,7 @@ set -Eeuo pipefail
 [[ "$#" == "8" ]] || { echo 'Deployment parameters are incomplete.' >&2; exit 1; }
 
 acr_name="$1"
-key_vault_name="$2"
+auth_hash="$(printf '%s' "$2" | base64 --decode)"
 image="$3"
 model="$(printf '%s' "$4" | base64 --decode)"
 fqdn="$5"
@@ -14,7 +14,8 @@ auth_user="$(printf '%s' "$7" | base64 --decode)"
 compute_profile="$8"
 
 [[ "$acr_name" =~ ^[a-z0-9]{5,50}$ ]] || { echo 'ACR name is invalid.' >&2; exit 1; }
-[[ "$key_vault_name" =~ ^[a-zA-Z0-9-]{3,24}$ ]] || { echo 'Key Vault name is invalid.' >&2; exit 1; }
+[[ "$auth_hash" == \$2a\$* || "$auth_hash" == \$2b\$* || "$auth_hash" == \$2y\$* ]] || { echo 'Authentication hash is invalid.' >&2; exit 1; }
+[[ "$auth_hash" != *$'\n'* && "$auth_hash" != *"'"* ]] || { echo 'Authentication hash has an invalid format.' >&2; exit 1; }
 [[ "$image" =~ ^[a-z0-9.-]+\.azurecr\.io/[a-z0-9._/-]+:[A-Za-z0-9._-]+$ ]] || { echo 'Image reference is invalid.' >&2; exit 1; }
 [[ "$model" =~ ^[A-Za-z0-9._:/-]+$ ]] || { echo 'Model name is invalid.' >&2; exit 1; }
 [[ "$fqdn" =~ ^[a-z0-9.-]+\.cloudapp\.azure\.com$ ]] || { echo 'Azure endpoint is invalid.' >&2; exit 1; }
@@ -31,8 +32,7 @@ for required in compose.yaml Caddyfile compose.acr.override.yaml compose.cpu.ove
   [[ -f "$required" ]] || { echo "Missing deployment file: $required" >&2; exit 1; }
 done
 
-# Authentication uses only the system-assigned VM identity. No registry or vault
-# credentials are stored on disk.
+# Registry authentication uses only the system-assigned VM identity.
 login_ok=false
 for _ in {1..24}; do
   if az login --identity --allow-no-subscriptions --output none 2>/dev/null; then
@@ -52,19 +52,6 @@ for _ in {1..24}; do
   sleep 5
 done
 [[ "$registry_ok" == true ]] || { echo 'Managed identity cannot access the container registry.' >&2; exit 1; }
-
-auth_hash=''
-for _ in {1..24}; do
-  auth_hash="$(az keyvault secret show \
-    --vault-name "$key_vault_name" \
-    --name keivo-auth-hash \
-    --query value \
-    --output tsv 2>/dev/null || true)"
-  [[ -n "$auth_hash" ]] && break
-  sleep 5
-done
-[[ -n "$auth_hash" ]] || { echo 'The protected authentication value is unavailable.' >&2; exit 1; }
-[[ "$auth_hash" != *$'\n'* && "$auth_hash" != *"'"* ]] || { echo 'The protected authentication value has an invalid format.' >&2; exit 1; }
 
 umask 077
 environment_tmp="$(mktemp /opt/keivo/.env.XXXXXX)"

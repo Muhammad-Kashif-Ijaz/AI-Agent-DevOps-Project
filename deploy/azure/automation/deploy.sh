@@ -4,12 +4,12 @@ set -Eeuo pipefail
 : "${RESOURCE_GROUP:?Set RESOURCE_GROUP}"
 : "${VM_NAME:?Set VM_NAME}"
 : "${ACR_NAME:?Set ACR_NAME}"
-: "${KEY_VAULT_NAME:?Set KEY_VAULT_NAME}"
 : "${KEIVO_IMAGE:?Set KEIVO_IMAGE}"
 : "${OLLAMA_MODEL:?Set OLLAMA_MODEL}"
 : "${KEIVO_FQDN:?Set KEIVO_FQDN}"
 : "${ACME_EMAIL:?Set ACME_EMAIL}"
 : "${KEIVO_AUTH_USER:?Set KEIVO_AUTH_USER}"
+: "${KEIVO_AUTH_HASH:?Set KEIVO_AUTH_HASH}"
 : "${COMPUTE_PROFILE:?Set COMPUTE_PROFILE}"
 
 [[ "$RESOURCE_GROUP" =~ ^[a-z][a-z0-9-]{2,40}$ ]] || { echo 'Resource group is invalid.' >&2; exit 1; }
@@ -17,6 +17,7 @@ set -Eeuo pipefail
 [[ "$OLLAMA_MODEL" =~ ^[A-Za-z0-9._:/-]+$ ]] || { echo 'Model name is invalid.' >&2; exit 1; }
 [[ "$ACME_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || { echo 'ACME email is invalid.' >&2; exit 1; }
 [[ "$KEIVO_AUTH_USER" =~ ^[A-Za-z0-9._-]{3,64}$ ]] || { echo 'Authentication username is invalid.' >&2; exit 1; }
+[[ "$KEIVO_AUTH_HASH" == \$2a\$* || "$KEIVO_AUTH_HASH" == \$2b\$* || "$KEIVO_AUTH_HASH" == \$2y\$* ]] || { echo 'Authentication hash is invalid.' >&2; exit 1; }
 [[ "$COMPUTE_PROFILE" =~ ^(free-cpu|gpu)$ ]] || { echo 'Compute profile is invalid.' >&2; exit 1; }
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,7 +42,9 @@ az vm run-command invoke \
 model_b64="$(printf '%s' "$OLLAMA_MODEL" | base64 -w 0)"
 email_b64="$(printf '%s' "$ACME_EMAIL" | base64 -w 0)"
 user_b64="$(printf '%s' "$KEIVO_AUTH_USER" | base64 -w 0)"
-remote_command="bash /opt/keivo/remote-deploy.sh '$ACR_NAME' '$KEY_VAULT_NAME' '$KEIVO_IMAGE' '$model_b64' '$KEIVO_FQDN' '$email_b64' '$user_b64' '$COMPUTE_PROFILE'"
+auth_hash_b64="$(printf '%s' "$KEIVO_AUTH_HASH" | base64 -w 0)"
+remote_command="bash /opt/keivo/remote-deploy.sh '$ACR_NAME' '$auth_hash_b64' '$KEIVO_IMAGE' '$model_b64' '$KEIVO_FQDN' '$email_b64' '$user_b64' '$COMPUTE_PROFILE'"
+unset KEIVO_AUTH_HASH auth_hash_b64
 
 az vm run-command invoke \
   --resource-group "$RESOURCE_GROUP" \

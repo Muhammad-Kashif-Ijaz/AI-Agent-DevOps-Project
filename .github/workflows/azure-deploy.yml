@@ -147,34 +147,6 @@ jobs:
           FQDN: ${{ steps.infra.outputs.fqdn }}
         run: printf 'url=https://%s\n' "$FQDN" >> "$GITHUB_OUTPUT"
 
-      - name: Store protected Caddy hash in Key Vault
-        if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}
-        shell: bash
-        env:
-          KEY_VAULT_NAME: ${{ steps.infra.outputs.key_vault_name }}
-          KEIVO_AUTH_HASH: ${{ secrets.KEIVO_AUTH_HASH }}
-        run: |
-          set -Eeuo pipefail
-          [[ -n "$KEIVO_AUTH_HASH" ]] || { echo 'KEIVO_AUTH_HASH is not configured.' >&2; exit 1; }
-          [[ "$KEIVO_AUTH_HASH" == \$2a\$* || "$KEIVO_AUTH_HASH" == \$2b\$* || "$KEIVO_AUTH_HASH" == \$2y\$* ]] || { echo 'KEIVO_AUTH_HASH must be a Caddy-compatible bcrypt hash.' >&2; exit 1; }
-          umask 077
-          secret_file="$(mktemp)"
-          trap 'rm -f "$secret_file"' EXIT
-          printf '%s' "$KEIVO_AUTH_HASH" > "$secret_file"
-          stored=false
-          for attempt in {1..18}; do
-            if az keyvault secret set \
-              --vault-name "$KEY_VAULT_NAME" \
-              --name keivo-auth-hash \
-              --file "$secret_file" \
-              --output none 2>/dev/null; then
-              stored=true
-              break
-            fi
-            sleep 10
-          done
-          [[ "$stored" == true ]] || { echo 'Key Vault access did not become ready.' >&2; exit 1; }
-
       - name: Build KEIVO image in Azure Container Registry
         id: image
         if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}
@@ -222,12 +194,12 @@ jobs:
           VM_NAME: ${{ steps.infra.outputs.vm_name }}
           AZURE_REGION: ${{ steps.region.outputs.region }}
           ACR_NAME: ${{ steps.infra.outputs.acr_name }}
-          KEY_VAULT_NAME: ${{ steps.infra.outputs.key_vault_name }}
           KEIVO_IMAGE: ${{ steps.image.outputs.reference }}
           OLLAMA_MODEL: ${{ inputs.model }}
           KEIVO_FQDN: ${{ steps.infra.outputs.fqdn }}
           ACME_EMAIL: ${{ inputs.acme_email }}
           KEIVO_AUTH_USER: ${{ inputs.auth_user }}
+          KEIVO_AUTH_HASH: ${{ secrets.KEIVO_AUTH_HASH }}
           COMPUTE_PROFILE: ${{ inputs.compute_profile }}
         run: bash deploy/azure/automation/deploy.sh
 

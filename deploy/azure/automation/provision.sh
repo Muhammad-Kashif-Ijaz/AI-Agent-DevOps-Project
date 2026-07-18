@@ -109,7 +109,7 @@ if [[ "$KEIVO_ACTION" == "status" || "$KEIVO_ACTION" == "deallocate" ]]; then
   exit 0
 fi
 
-for namespace in Microsoft.Compute Microsoft.Network Microsoft.ContainerRegistry Microsoft.KeyVault; do
+for namespace in Microsoft.Compute Microsoft.Network Microsoft.ContainerRegistry; do
   az provider register --namespace "$namespace" --wait --output none
 done
 
@@ -122,15 +122,6 @@ az acr create \
   --location "$AZURE_REGION" \
   --sku "$acr_sku" \
   --admin-enabled false \
-  --output none
-
-az keyvault create \
-  --resource-group "$resource_group" \
-  --name "$key_vault_name" \
-  --location "$AZURE_REGION" \
-  --enable-rbac-authorization true \
-  --retention-days 7 \
-  --enable-purge-protection true \
   --output none
 
 az network nsg create \
@@ -280,9 +271,7 @@ principal_id="$(az vm identity show \
 [[ -n "$principal_id" ]] || fail "The VM managed identity was not created."
 
 acr_id="$(az acr show --resource-group "$resource_group" --name "$acr_name" --query id --output tsv)"
-vault_id="$(az keyvault show --resource-group "$resource_group" --name "$key_vault_name" --query id --output tsv)"
-
-for role_scope in "AcrPull|$acr_id" "Key Vault Secrets User|$vault_id"; do
+for role_scope in "AcrPull|$acr_id"; do
   role="${role_scope%%|*}"
   scope="${role_scope#*|}"
   count="$(az role assignment list \
