@@ -16,7 +16,7 @@ on:
       prefix:
         description: Stable lowercase resource prefix (use the same value on later runs)
         required: true
-        default: keivo-prod
+        default: keivo-live
         type: string
       compute_profile:
         description: Free-subscription CPU profile or optional paid GPU profile
@@ -27,9 +27,9 @@ on:
           - free-cpu
           - gpu
       region:
-        description: Azure region where the selected VM size is available
+        description: Use auto to select a region with VM capacity and public-IP quota
         required: true
-        default: eastus
+        default: auto
         type: string
       vm_size:
         description: VM size (free-cpu requires Standard_B2ats_v2)
@@ -116,13 +116,23 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Select a compatible Azure region
+        id: region
+        shell: bash
+        env:
+          KEIVO_ACTION: ${{ inputs.action }}
+          KEIVO_PREFIX: ${{ inputs.prefix }}
+          AZURE_REGION: ${{ inputs.region }}
+          VM_SIZE: ${{ inputs.vm_size }}
+        run: bash deploy/azure/automation/resolve-region.sh
+
       - name: Provision or inspect Azure resources
         id: infra
         shell: bash
         env:
           KEIVO_ACTION: ${{ inputs.action }}
           KEIVO_PREFIX: ${{ inputs.prefix }}
-          AZURE_REGION: ${{ inputs.region }}
+          AZURE_REGION: ${{ steps.region.outputs.region }}
           VM_SIZE: ${{ inputs.vm_size }}
           DATA_DISK_GB: ${{ inputs.data_disk_gb }}
           ADMIN_USERNAME: ${{ inputs.admin_username }}
@@ -210,6 +220,7 @@ jobs:
         env:
           RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
           VM_NAME: ${{ steps.infra.outputs.vm_name }}
+          AZURE_REGION: ${{ steps.region.outputs.region }}
           ACR_NAME: ${{ steps.infra.outputs.acr_name }}
           KEY_VAULT_NAME: ${{ steps.infra.outputs.key_vault_name }}
           KEIVO_IMAGE: ${{ steps.image.outputs.reference }}
@@ -254,6 +265,7 @@ jobs:
           VM_STATE: ${{ steps.infra.outputs.vm_state }}
           RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
           VM_NAME: ${{ steps.infra.outputs.vm_name }}
+          AZURE_REGION: ${{ steps.region.outputs.region }}
         run: |
           {
             echo '## KEIVO Azure deployment'
@@ -261,6 +273,7 @@ jobs:
             echo "- Action: \`$ACTION\`"
             [[ -z "$RESOURCE_GROUP" ]] || echo "- Resource group: \`$RESOURCE_GROUP\`"
             [[ -z "$VM_NAME" ]] || echo "- VM: \`$VM_NAME\`"
+            [[ -z "$AZURE_REGION" ]] || echo "- Region: \`$AZURE_REGION\`"
             [[ -z "$VM_STATE" ]] || echo "- VM state: **$VM_STATE**"
             [[ -z "$ENDPOINT" ]] || echo "- HTTPS endpoint: [$ENDPOINT]($ENDPOINT)"
             echo
