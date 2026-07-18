@@ -15,6 +15,9 @@ param(
     [ValidatePattern('^[A-Za-z0-9_.-]+$')]
     [string]$GitHubEnvironment = 'production',
 
+    [ValidatePattern('^repo:[^:]+/[^:]+:environment:[^:]+$')]
+    [string]$FederatedSubject,
+
     [ValidatePattern('^[A-Za-z0-9_.-]+$')]
     [string]$ApplicationName = 'keivo-github-production'
 )
@@ -47,7 +50,12 @@ if ([string]::IsNullOrWhiteSpace($principalId)) {
 }
 
 $credentialName = "github-$GitHubEnvironment"
-$subject = "repo:$GitHubOwner/$GitHubRepo`:environment:$GitHubEnvironment"
+$subject = if ([string]::IsNullOrWhiteSpace($FederatedSubject)) {
+    "repo:$GitHubOwner/$GitHubRepo`:environment:$GitHubEnvironment"
+}
+else {
+    $FederatedSubject
+}
 $existingCredentialId = az ad app federated-credential list `
     --id $appId `
     --query "[?name=='$credentialName'].id | [0]" `

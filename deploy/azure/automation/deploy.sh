@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/az-retry.sh"
+
 : "${RESOURCE_GROUP:?Set RESOURCE_GROUP}"
 : "${VM_NAME:?Set VM_NAME}"
 : "${OLLAMA_MODEL:?Set OLLAMA_MODEL}"
@@ -18,7 +21,6 @@ set -Eeuo pipefail
 [[ "$KEIVO_AUTH_HASH" == \$2a\$* || "$KEIVO_AUTH_HASH" == \$2b\$* || "$KEIVO_AUTH_HASH" == \$2y\$* ]] || { echo 'Authentication hash is invalid.' >&2; exit 1; }
 [[ "$COMPUTE_PROFILE" =~ ^(free-cpu|gpu)$ ]] || { echo 'Compute profile is invalid.' >&2; exit 1; }
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 azure_dir="$(cd -- "$script_dir/.." && pwd)"
 project_dir="$(cd -- "$azure_dir/../.." && pwd)"
 

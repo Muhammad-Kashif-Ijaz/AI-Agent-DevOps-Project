@@ -27,6 +27,8 @@ Run as an Azure administrator. The script opens interactive `az login`, creates 
 
 It grants `Contributor`, `Role Based Access Control Administrator`, and `Key Vault Secrets Officer` at subscription scope. These are powerful provisioning roles; prefer a dedicated subscription and remove the assignments when retiring the deployment.
 
+If Azure reports `AADSTS700213`, copy the complete subject shown in that error and rerun the command with `-FederatedSubject 'repo:...:environment:production'`. GitHub can issue immutable owner/repository-ID subjects containing `@` suffixes; Azure must store the exact presented value.
+
 ## GitHub production environment
 
 Create a GitHub Environment named **`production`**, add a required reviewer, and store:
@@ -49,6 +51,8 @@ The workflow writes the masked hash to Key Vault through a temporary owner-reada
 ## Run and verify
 
 Open **Actions → Deploy KEIVO to Azure → Run workflow**. Actions are `provision`, `update`, `deallocate`, and read-only `status`. Keep the same prefix for the same deployment. `acme_email` is required for provision/update. GPU users must change `compute_profile`, VM size, model, and disk inputs together.
+
+Leave `region` as `auto`. Before creating resources, the workflow checks subscription-specific VM SKU restrictions and regional public-IP usage, then selects a region with both capacity and quota. Keep the selected prefix for later update/status/deallocate runs.
 
 Provision/update builds the current commit with `az acr build`, installs the selected profile's dependencies without SSH, starts the existing Compose/Caddy stack, and performs two real checks:
 

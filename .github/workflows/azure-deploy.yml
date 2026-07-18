@@ -156,6 +156,7 @@ jobs:
           COMPUTE_PROFILE: ${{ inputs.compute_profile }}
         run: |
           set -Eeuo pipefail
+          source deploy/azure/automation/az-retry.sh
           wrapper="$(mktemp)"
           trap 'rm -f "$wrapper"' EXIT
           printf 'export COMPUTE_PROFILE=%q\n' "$COMPUTE_PROFILE" > "$wrapper"
