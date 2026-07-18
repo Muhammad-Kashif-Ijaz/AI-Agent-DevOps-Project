@@ -1,0 +1,274 @@
+name: Deploy KEIVO to Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Provision, update, deallocate, or inspect the deployment
+        required: true
+        default: provision
+        type: choice
+        options:
+          - provision
+          - update
+          - deallocate
+          - status
+      prefix:
+        description: Stable lowercase resource prefix (use the same value on later runs)
+        required: true
+        default: keivo-prod
+        type: string
+      compute_profile:
+        description: Free-subscription CPU profile or optional paid GPU profile
+        required: true
+        default: free-cpu
+        type: choice
+        options:
+          - free-cpu
+          - gpu
+      region:
+        description: Azure region where the selected VM size is available
+        required: true
+        default: eastus
+        type: string
+      vm_size:
+        description: VM size (free-cpu requires Standard_B2ats_v2)
+        required: true
+        default: Standard_B2ats_v2
+        type: string
+      data_disk_gb:
+        description: Persistent managed disk size for images, models, and chats
+        required: true
+        default: '64'
+        type: string
+      model:
+        description: Local Ollama model tag
+        required: true
+        default: qwen3:0.6b
+        type: string
+      admin_username:
+        description: VM administrator name (SSH is not opened by the NSG)
+        required: true
+        default: azureuser
+        type: string
+      auth_user:
+        description: Username for KEIVO HTTPS Basic Authentication
+        required: true
+        default: keivo-admin
+        type: string
+      acme_email:
+        description: Contact email for HTTPS certificates (required for provision/update)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: keivo-azure-${{ inputs.prefix }}
+  cancel-in-progress: false
+
+jobs:
+  azure:
+    name: ${{ inputs.action }} KEIVO
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: production
+    outputs:
+      endpoint: ${{ steps.endpoint.outputs.url }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate deployment inputs
+        if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}
+        shell: bash
+        env:
+          ACME_EMAIL: ${{ inputs.acme_email }}
+          OLLAMA_MODEL: ${{ inputs.model }}
+          KEIVO_AUTH_USER: ${{ inputs.auth_user }}
+          COMPUTE_PROFILE: ${{ inputs.compute_profile }}
+          VM_SIZE: ${{ inputs.vm_size }}
+          DATA_DISK_GB: ${{ inputs.data_disk_gb }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$ACME_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || { echo 'A valid ACME email is required.' >&2; exit 1; }
+          [[ "$OLLAMA_MODEL" =~ ^[A-Za-z0-9._:/-]+$ ]] || { echo 'The model tag contains unsupported characters.' >&2; exit 1; }
+          [[ "$KEIVO_AUTH_USER" =~ ^[A-Za-z0-9._-]{3,64}$ ]] || { echo 'The authentication username is invalid.' >&2; exit 1; }
+          if [[ "$COMPUTE_PROFILE" == 'free-cpu' ]]; then
+            [[ "$VM_SIZE" == 'Standard_B2ats_v2' ]] || { echo 'free-cpu requires Standard_B2ats_v2.' >&2; exit 1; }
+            [[ "$OLLAMA_MODEL" == 'qwen3:0.6b' ]] || { echo 'free-cpu requires qwen3:0.6b.' >&2; exit 1; }
+            [[ "$DATA_DISK_GB" == '64' ]] || { echo 'free-cpu requires a 64 GiB data disk.' >&2; exit 1; }
+          elif [[ "$COMPUTE_PROFILE" == 'gpu' ]]; then
+            [[ "$VM_SIZE" == Standard_NC* ]] || { echo 'gpu requires an Azure NC-series VM size.' >&2; exit 1; }
+            [[ "$DATA_DISK_GB" =~ ^[0-9]+$ ]] && (( DATA_DISK_GB >= 128 )) || { echo 'gpu requires at least 128 GiB of data disk.' >&2; exit 1; }
+          else
+            echo 'Unknown compute profile.' >&2
+            exit 1
+          fi
+
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Provision or inspect Azure resources
+        id: infra
+        shell: bash
+        env:
+          KEIVO_ACTION: ${{ inputs.action }}
+          KEIVO_PREFIX: ${{ inputs.prefix }}
+          AZURE_REGION: ${{ inputs.region }}
+          VM_SIZE: ${{ inputs.vm_size }}
+          DATA_DISK_GB: ${{ inputs.data_disk_gb }}
+          ADMIN_USERNAME: ${{ inputs.admin_username }}
+          COMPUTE_PROFILE: ${{ inputs.compute_profile }}
+        run: bash deploy/azure/automation/provision.sh
+
+      - name: Publish endpoint output
+        id: endpoint
+        if: ${{ steps.infra.outputs.fqdn != '' }}
+        shell: bash
+        env:
+          FQDN: ${{ steps.infra.outputs.fqdn }}
+        run: printf 'url=https://%s\n' "$FQDN" >> "$GITHUB_OUTPUT"
+
+      - name: Store protected Caddy hash in Key Vault
+        if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}
+        shell: bash
+        env:
+          KEY_VAULT_NAME: ${{ steps.infra.outputs.key_vault_name }}
+          KEIVO_AUTH_HASH: ${{ secrets.KEIVO_AUTH_HASH }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$KEIVO_AUTH_HASH" ]] || { echo 'KEIVO_AUTH_HASH is not configured.' >&2; exit 1; }
+          [[ "$KEIVO_AUTH_HASH" == \$2a\$* || "$KEIVO_AUTH_HASH" == \$2b\$* || "$KEIVO_AUTH_HASH" == \$2y\$* ]] || { echo 'KEIVO_AUTH_HASH must be a Caddy-compatible bcrypt hash.' >&2; exit 1; }
+          umask 077
+          secret_file="$(mktemp)"
+          trap 'rm -f "$secret_file"' EXIT
+          printf '%s' "$KEIVO_AUTH_HASH" > "$secret_file"
+          stored=false
+          for attempt in {1..18}; do
+            if az keyvault secret set \
+              --vault-name "$KEY_VAULT_NAME" \
+              --name keivo-auth-hash \
+              --file "$secret_file" \
+              --output none 2>/dev/null; then
+              stored=true
+              break
+            fi
+            sleep 10
+          done
+          [[ "$stored" == true ]] || { echo 'Key Vault access did not become ready.' >&2; exit 1; }
+
+      - name: Build KEIVO image in Azure Container Registry
+        id: image
+        if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}
+        shell: bash
+        env:
+          ACR_NAME: ${{ steps.infra.outputs.acr_name }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          login_server="$(az acr show --name "$ACR_NAME" --query loginServer --output tsv)"
+          image="$login_server/keivo:$IMAGE_TAG"
+          az acr build \
+            --registry "$ACR_NAME" \
+            --image "keivo:$IMAGE_TAG" \
+            --file deploy/azure/Dockerfile \
+            .
+          printf 'reference=%s\n' "$image" >> "$GITHUB_OUTPUT"
+
+      - name: Install VM runtime dependencies
+        if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}
+        shell: bash
+        env:
+          RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
+          VM_NAME: ${{ steps.infra.outputs.vm_name }}
+          COMPUTE_PROFILE: ${{ inputs.compute_profile }}
+        run: |
+          set -Eeuo pipefail
+          wrapper="$(mktemp)"
+          trap 'rm -f "$wrapper"' EXIT
+          printf 'export COMPUTE_PROFILE=%q\n' "$COMPUTE_PROFILE" > "$wrapper"
+          cat deploy/azure/automation/install-vm.sh >> "$wrapper"
+          az vm run-command invoke \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$VM_NAME" \
+            --command-id RunShellScript \
+            --scripts @"$wrapper" \
+            --query 'value[0].message' \
+            --output tsv
+
+      - name: Deploy Compose stack without SSH
+        if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}
+        shell: bash
+        env:
+          RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
+          VM_NAME: ${{ steps.infra.outputs.vm_name }}
+          ACR_NAME: ${{ steps.infra.outputs.acr_name }}
+          KEY_VAULT_NAME: ${{ steps.infra.outputs.key_vault_name }}
+          KEIVO_IMAGE: ${{ steps.image.outputs.reference }}
+          OLLAMA_MODEL: ${{ inputs.model }}
+          KEIVO_FQDN: ${{ steps.infra.outputs.fqdn }}
+          ACME_EMAIL: ${{ inputs.acme_email }}
+          KEIVO_AUTH_USER: ${{ inputs.auth_user }}
+          COMPUTE_PROFILE: ${{ inputs.compute_profile }}
+        run: bash deploy/azure/automation/deploy.sh
+
+      - name: Verify public HTTPS boundary
+        if: ${{ inputs.action == 'provision' || inputs.action == 'update' }}
+        shell: bash
+        env:
+          ENDPOINT: https://${{ steps.infra.outputs.fqdn }}
+        run: |
+          set -Eeuo pipefail
+          healthy=false
+          for attempt in {1..60}; do
+            if code="$(curl --silent --show-error \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              --connect-timeout 5 \
+              --max-time 20 \
+              "$ENDPOINT")"; then
+              if [[ "$code" == '401' ]]; then
+                healthy=true
+                break
+              fi
+            fi
+            sleep 10
+          done
+          [[ "$healthy" == true ]] || { echo 'Public TLS/authentication health check failed.' >&2; exit 1; }
+          echo 'HTTPS is live and correctly protected by authentication.'
+
+      - name: Deployment summary
+        if: ${{ always() }}
+        shell: bash
+        env:
+          ACTION: ${{ inputs.action }}
+          ENDPOINT: ${{ steps.endpoint.outputs.url }}
+          VM_STATE: ${{ steps.infra.outputs.vm_state }}
+          RESOURCE_GROUP: ${{ steps.infra.outputs.resource_group }}
+          VM_NAME: ${{ steps.infra.outputs.vm_name }}
+        run: |
+          {
+            echo '## KEIVO Azure deployment'
+            echo
+            echo "- Action: \`$ACTION\`"
+            [[ -z "$RESOURCE_GROUP" ]] || echo "- Resource group: \`$RESOURCE_GROUP\`"
+            [[ -z "$VM_NAME" ]] || echo "- VM: \`$VM_NAME\`"
+            [[ -z "$VM_STATE" ]] || echo "- VM state: **$VM_STATE**"
+            [[ -z "$ENDPOINT" ]] || echo "- HTTPS endpoint: [$ENDPOINT]($ENDPOINT)"
+            echo
+            if [[ "$ACTION" == 'deallocate' ]]; then
+              echo 'The VM is deallocated, stopping compute charges. Managed disks, registry, Key Vault, and public IP can still incur charges.'
+            elif [[ "$ACTION" == 'status' ]]; then
+              echo 'Status is read-only; no infrastructure was changed.'
+            else
+              echo 'Only ports 80 and 443 are allowed inbound. Administration and deployment use Azure Run Command and managed identity.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0b0b0c" />
+    <meta
+      name="description"
+      content="KEIVO is a focused workspace for clear thinking, research, writing, and everyday questions."
+    />
+    <title>KEIVO — Ask anything</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230b0b0c'/%3E%3Cg fill='%23fff' transform='translate(4 4)'%3E%3Cpath d='M4 3.5h4.8v6.1l5.3-6.1h5.6l-7.5 8.1H4z'/%3E%3Cpath d='M4 12.5h8.2l7.5 8h-5.6l-5.3-5.9v5.9H4z'/%3E%3Ccircle cx='20.7' cy='2.6' r='1.25'/%3E%3C/g%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#composerInput">Skip to message</a>
+
+    <div class="app-shell" id="appShell">
+      <div class="sidebar-scrim" id="sidebarScrim" aria-hidden="true"></div>
+
+      <aside class="sidebar" id="sidebar" aria-label="Conversation history">
+        <div class="sidebar-head">
+          <div class="brand" aria-label="KEIVO home">
+            <span class="brand-mark" aria-hidden="true">
+              <svg class="keivo-glyph" viewBox="0 0 24 24">
+                <path d="M4 3.5h4.8v6.1l5.3-6.1h5.6l-7.5 8.1H4z" />
+                <path d="M4 12.5h8.2l7.5 8h-5.6l-5.3-5.9v5.9H4z" />
+                <circle cx="20.7" cy="2.6" r="1.25" />
+              </svg>
+            </span>
+            <span class="brand-name">KEIVO</span>
+          </div>
+
+          <button class="icon-button sidebar-close" id="sidebarClose" type="button" aria-label="Close sidebar" aria-controls="sidebar">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m7 7 10 10M17 7 7 17" />
+            </svg>
+          </button>
+        </div>
+
+        <button class="new-chat-button" id="newChatButton" type="button">
+          <span>New conversation</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+
+        <label class="history-search" for="historySearch">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" />
+            <path d="m16 16 4 4" />
+          </svg>
+          <input id="historySearch" type="search" placeholder="Search conversations" autocomplete="off" />
+          <kbd>&#8984;K</kbd>
+        </label>
+
+        <nav class="history" id="history" aria-label="Saved conversations">
+          <div class="history-loading" id="historyLoading" aria-label="Loading conversations">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="history-groups" id="historyGroups"></div>
+          <p class="history-empty" id="historyEmpty" hidden>No conversations yet</p>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="presence" aria-label="KEIVO status">
+            <span class="presence-dot is-preparing" id="presenceDot" aria-hidden="true"></span>
+            <span id="presenceLabel">KEIVO is preparing</span>
+          </div>
+          <button class="theme-toggle sidebar-theme" id="sidebarThemeToggle" type="button" aria-label="Use light theme">
+            <span>Appearance</span>
+            <span class="theme-track" aria-hidden="true"><span class="theme-knob"></span></span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="main-pane">
+        <header class="topbar">
+          <button class="icon-button menu-button" id="menuButton" type="button" aria-label="Open conversation history" aria-controls="sidebar" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16M4 12h16M4 17h10" />
+            </svg>
+          </button>
+
+          <div class="conversation-heading">
+            <h1 id="conversationTitle">New conversation</h1>
+          </div>
+
+          <div class="topbar-actions">
+            <button class="icon-button theme-icon" id="themeIconButton" type="button" aria-label="Use light theme">
+              <svg class="moon-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 15.2A8.5 8.5 0 0 1 8.8 4a8.5 8.5 0 1 0 11.2 11.2Z" />
+              </svg>
+              <svg class="sun-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="3.5" />
+                <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <section class="chat-scroll" id="chatScroll" aria-label="Conversation" tabindex="-1">
+          <div class="empty-state" id="emptyState">
+            <div class="signal" aria-hidden="true">
+              <span class="signal-ring signal-ring-one"></span>
+              <span class="signal-ring signal-ring-two"></span>
+              <span class="signal-core">
+                <svg class="keivo-glyph" viewBox="0 0 24 24">
+                  <path d="M4 3.5h4.8v6.1l5.3-6.1h5.6l-7.5 8.1H4z" />
+                  <path d="M4 12.5h8.2l7.5 8h-5.6l-5.3-5.9v5.9H4z" />
+                  <circle cx="20.7" cy="2.6" r="1.25" />
+                </svg>
+              </span>
+            </div>
+            <p class="empty-eyebrow">A clear place to think</p>
+            <h2>What can I help you solve?</h2>
+            <p class="empty-copy">Ask a question, shape an idea, or work through something complex.</p>
+            <div class="starter-prompts" aria-label="Suggested prompts">
+              <button type="button" data-prompt="Help me turn a rough idea into a clear plan">
+                <span>Turn an idea into a clear plan</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5" /></svg>
+              </button>
+              <button type="button" data-prompt="Explain a difficult topic to me in simple language">
+                <span>Explain something difficult simply</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5" /></svg>
+              </button>
+              <button type="button" data-prompt="Review my options and help me make a thoughtful decision">
+                <span>Think through a decision</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="messages" id="messages" role="log" aria-live="polite" aria-relevant="additions text" aria-busy="false"></div>
+          <div class="scroll-anchor" id="scrollAnchor" aria-hidden="true"></div>
+        </section>
+
+        <button class="jump-button" id="jumpButton" type="button" aria-label="Jump to latest message" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+        </button>
+
+        <footer class="composer-region">
+          <form class="composer" id="composerForm">
+            <label class="sr-only" for="composerInput">Message KEIVO</label>
+            <textarea
+              id="composerInput"
+              rows="1"
+              maxlength="16000"
+              placeholder="Ask anything…"
+              autocomplete="off"
+              enterkeyhint="send"
+              aria-describedby="composerHint"
+            ></textarea>
+
+            <div class="composer-bottom">
+              <div class="composer-tools">
+                <button class="composer-tool" id="voiceButton" type="button" aria-label="Start voice input">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="9" y="3" width="6" height="11" rx="3" />
+                    <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6" />
+                  </svg>
+                  <span class="voice-label">Voice</span>
+                </button>
+                <span class="listening-state" id="listeningState" role="status" hidden>
+                  <span></span><span></span><span></span>
+                  Listening
+                </span>
+              </div>
+
+              <p class="composer-hint" id="composerHint">Enter to send</p>
+
+              <button class="send-button" id="sendButton" type="submit" aria-label="Send message" disabled>
+                <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 19V5M6.5 10.5 12 5l5.5 5.5" />
+                </svg>
+                <svg class="stop-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="7.5" y="7.5" width="9" height="9" rx="1.5" />
+                </svg>
+              </button>
+            </div>
+          </form>
+          <p class="fine-print">KEIVO can make mistakes. Check important details.</p>
+        </footer>
+      </main>
+    </div>
+
+    <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,5 @@
+services:
+  keivo:
+    image: ${KEIVO_IMAGE:?Set KEIVO_IMAGE in .env}
+    build: null
+    pull_policy: always

@@ -1,0 +1,8 @@
+**
+!requirements.txt
+!server.py
+!static
+!static/**
+!deploy
+!deploy/azure
+!deploy/azure/Dockerfile

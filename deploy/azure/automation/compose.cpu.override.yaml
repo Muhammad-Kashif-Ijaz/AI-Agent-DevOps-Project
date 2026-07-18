@@ -1,0 +1,15 @@
+services:
+  ollama:
+    environment:
+      CUDA_VISIBLE_DEVICES: ""
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
+      OLLAMA_MAX_QUEUE: ${OLLAMA_MAX_QUEUE:-8}
+      OLLAMA_THINK: "false"
+    deploy:
+      resources:
+        reservations:
+          devices: !reset []
+  keivo:
+    environment:
+      OLLAMA_THINK: "false"

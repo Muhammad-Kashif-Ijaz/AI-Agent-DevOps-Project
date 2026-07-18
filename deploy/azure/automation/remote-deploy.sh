@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ "$(id -u)" == "0" ]] || { echo 'Deployment must run as root.' >&2; exit 1; }
+[[ "$#" == "8" ]] || { echo 'Deployment parameters are incomplete.' >&2; exit 1; }
+
+acr_name="$1"
+key_vault_name="$2"
+image="$3"
+model="$(printf '%s' "$4" | base64 --decode)"
+fqdn="$5"
+acme_email="$(printf '%s' "$6" | base64 --decode)"
+auth_user="$(printf '%s' "$7" | base64 --decode)"
+compute_profile="$8"
+
+[[ "$acr_name" =~ ^[a-z0-9]{5,50}$ ]] || { echo 'ACR name is invalid.' >&2; exit 1; }
+[[ "$key_vault_name" =~ ^[a-zA-Z0-9-]{3,24}$ ]] || { echo 'Key Vault name is invalid.' >&2; exit 1; }
+[[ "$image" =~ ^[a-z0-9.-]+\.azurecr\.io/[a-z0-9._/-]+:[A-Za-z0-9._-]+$ ]] || { echo 'Image reference is invalid.' >&2; exit 1; }
+[[ "$model" =~ ^[A-Za-z0-9._:/-]+$ ]] || { echo 'Model name is invalid.' >&2; exit 1; }
+[[ "$fqdn" =~ ^[a-z0-9.-]+\.cloudapp\.azure\.com$ ]] || { echo 'Azure endpoint is invalid.' >&2; exit 1; }
+[[ "$acme_email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || { echo 'ACME email is invalid.' >&2; exit 1; }
+[[ "$auth_user" =~ ^[A-Za-z0-9._-]{3,64}$ ]] || { echo 'Authentication username is invalid.' >&2; exit 1; }
+[[ "$compute_profile" =~ ^(free-cpu|gpu)$ ]] || { echo 'Compute profile is invalid.' >&2; exit 1; }
+if [[ "$compute_profile" == "free-cpu" && "$model" != "qwen3:0.6b" ]]; then
+  echo 'The free CPU profile requires qwen3:0.6b.' >&2
+  exit 1
+fi
+
+cd /opt/keivo
+for required in compose.yaml Caddyfile compose.acr.override.yaml compose.cpu.override.yaml; do
+  [[ -f "$required" ]] || { echo "Missing deployment file: $required" >&2; exit 1; }
+done
+
+# Authentication uses only the system-assigned VM identity. No registry or vault
+# credentials are stored on disk.
+login_ok=false
+for _ in {1..24}; do
+  if az login --identity --allow-no-subscriptions --output none 2>/dev/null; then
+    login_ok=true
+    break
+  fi
+  sleep 5
+done
+[[ "$login_ok" == true ]] || { echo 'Managed identity sign-in is not ready.' >&2; exit 1; }
+
+registry_ok=false
+for _ in {1..24}; do
+  if az acr login --name "$acr_name" --output none 2>/dev/null; then
+    registry_ok=true
+    break
+  fi
+  sleep 5
+done
+[[ "$registry_ok" == true ]] || { echo 'Managed identity cannot access the container registry.' >&2; exit 1; }
+
+auth_hash=''
+for _ in {1..24}; do
+  auth_hash="$(az keyvault secret show \
+    --vault-name "$key_vault_name" \
+    --name keivo-auth-hash \
+    --query value \
+    --output tsv 2>/dev/null || true)"
+  [[ -n "$auth_hash" ]] && break
+  sleep 5
+done
+[[ -n "$auth_hash" ]] || { echo 'The protected authentication value is unavailable.' >&2; exit 1; }
+[[ "$auth_hash" != *$'\n'* && "$auth_hash" != *"'"* ]] || { echo 'The protected authentication value has an invalid format.' >&2; exit 1; }
+
+umask 077
+environment_tmp="$(mktemp /opt/keivo/.env.XXXXXX)"
+trap 'rm -f "$environment_tmp"' EXIT
+{
+  printf 'KEIVO_DOMAIN=%s\n' "$fqdn"
+  printf 'ACME_EMAIL=%s\n' "$acme_email"
+  printf 'KEIVO_AUTH_USER=%s\n' "$auth_user"
+  printf "KEIVO_AUTH_HASH='%s'\n" "$auth_hash"
+  printf 'KEIVO_IMAGE=%s\n' "$image"
+  printf 'OLLAMA_MODEL=%s\n' "$model"
+  printf 'OLLAMA_IMAGE_TAG=latest\n'
+  if [[ "$compute_profile" == "free-cpu" ]]; then
+    printf 'OLLAMA_KEEP_ALIVE=1m\n'
+    printf 'OLLAMA_THINK=false\n'
+    printf 'OLLAMA_NUM_PARALLEL=1\n'
+    printf 'OLLAMA_MAX_LOADED_MODELS=1\n'
+    printf 'OLLAMA_MAX_QUEUE=8\n'
+    printf 'AGENT_MAX_OUTPUT_TOKENS=1024\n'
+    printf 'AGENT_CONTEXT_WINDOW=2048\n'
+    printf 'AGENT_USAGE_LIMIT_PER_HOUR=20\n'
+  else
+    printf 'OLLAMA_KEEP_ALIVE=10m\n'
+    printf 'OLLAMA_NUM_PARALLEL=2\n'
+    printf 'OLLAMA_MAX_LOADED_MODELS=1\n'
+    printf 'OLLAMA_MAX_QUEUE=64\n'
+    printf 'AGENT_MAX_OUTPUT_TOKENS=8192\n'
+    printf 'AGENT_CONTEXT_WINDOW=32768\n'
+    printf 'AGENT_USAGE_LIMIT_PER_HOUR=60\n'
+  fi
+  printf 'AGENT_TEMPERATURE=0.55\n'
+  printf 'AGENT_MAX_INPUT_CHARS=24000\n'
+  printf 'AGENT_REQUEST_TIMEOUT=600\n'
+} > "$environment_tmp"
+chmod 600 "$environment_tmp"
+mv -f "$environment_tmp" /opt/keivo/.env
+trap - EXIT
+unset auth_hash
+
+compose=(docker compose --env-file .env -f compose.yaml -f compose.acr.override.yaml)
+if [[ "$compute_profile" == "free-cpu" ]]; then
+  compose+=(-f compose.cpu.override.yaml)
+fi
+"${compose[@]}" config --quiet
+"${compose[@]}" pull
+"${compose[@]}" up -d --remove-orphans
+
+healthy=false
+for _ in {1..180}; do
+  if "${compose[@]}" exec -T keivo python -c \
+    "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/status',timeout=5)); raise SystemExit(0 if d.get('ready') else 1)" \
+    >/dev/null 2>&1; then
+    healthy=true
+    break
+  fi
+  sleep 5
+done
+
+if [[ "$healthy" != true ]]; then
+  "${compose[@]}" ps
+  "${compose[@]}" logs --tail=120 keivo ollama model-pull caddy || true
+  echo 'KEIVO did not become ready before the health-check deadline.' >&2
+  exit 1
+fi
+
+# Exercise the same persistent chat and NDJSON streaming path used by the browser.
+# The temporary health-check conversation is deleted whether the prompt succeeds or fails.
+"${compose[@]}" exec -T keivo python - <<'PY'
+import json
+import urllib.request
+
+base = "http://127.0.0.1:8000"
+
+def call(path, *, method="GET", payload=None, timeout=30):
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        base + path,
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    return urllib.request.urlopen(request, timeout=timeout)
+
+with call("/api/chats", method="POST", payload={"title": "Deployment check"}) as response:
+    chat_id = json.load(response)["chat"]["id"]
+
+try:
+    request = urllib.request.Request(
+        f"{base}/api/chats/{chat_id}/messages",
+        data=json.dumps({"content": "Reply briefly with the word READY."}).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"},
+    )
+    saw_delta = False
+    saw_done = False
+    with urllib.request.urlopen(request, timeout=600) as response:
+        for raw_line in response:
+            if not raw_line.strip():
+                continue
+            event = json.loads(raw_line)
+            if event.get("type") == "delta" and event.get("text"):
+                saw_delta = True
+            elif event.get("type") == "done":
+                saw_done = True
+            elif event.get("type") == "error":
+                raise RuntimeError("Assistant stream returned an error event")
+    if not (saw_delta and saw_done):
+        raise RuntimeError("Assistant stream did not include both delta and done events")
+finally:
+    try:
+        call(f"/api/chats/{chat_id}", method="DELETE", timeout=15).close()
+    except Exception:
+        pass
+PY
+
+"${compose[@]}" ps
+docker logout "${acr_name}.azurecr.io" >/dev/null 2>&1 || true
+printf 'KEIVO application and local model are healthy.\n'

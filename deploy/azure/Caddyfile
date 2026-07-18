@@ -1,0 +1,34 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+}
+
+{$KEIVO_DOMAIN} {
+	encode zstd gzip
+
+	basic_auth {
+		{$KEIVO_AUTH_USER} {$KEIVO_AUTH_HASH}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), geolocation=(), microphone=(self), payment=(), usb=()"
+		-Server
+	}
+
+	reverse_proxy keivo:8000 {
+		flush_interval -1
+		transport http {
+			keepalive 30s
+			response_header_timeout 10m
+		}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
